@@ -639,7 +639,7 @@
                 <li><strong>Completar el formulario:</strong>
                     <ul>
                         <li>Selecciona la hora de inicio usando los menús desplegables</li>
-                        <li>Ingresa la duración en minutos</li>
+                                <li>Ingresa la duración en minutos <strong>o</strong> la hora de fin (uno actualiza el otro)</li>
                         <li>Escribe el nombre de la actividad</li>
                     </ul>
                 </li>
@@ -722,8 +722,26 @@
                     <input type="hidden" id="time" required>
                 </div>
                 <div class="form-group">
-                    <label for="duration">Duración (minutos):</label>
-                    <input type="number" id="duration" min="1" required>
+                    <label for="duration">Duración (minutos) <span style="font-weight: normal; color: #aaa;">(o ingresa la hora de fin)</span>:</label>
+                    <input type="number" id="duration" min="1" placeholder="Ej: 45">
+                </div>
+                <div class="form-group">
+                    <label for="endTime">Hora de fin <span style="font-weight: normal; color: #aaa;">(o ingresa la duración)</span>:</label>
+                    <div class="time-selector">
+                        <select id="endTimeHour">
+                            <option value="">Hora</option>
+                        </select>
+                        <span class="time-separator">:</span>
+                        <select id="endTimeMinute">
+                            <option value="">Min</option>
+                        </select>
+                        <select id="endTimeAmPm">
+                            <option value="">AM/PM</option>
+                            <option value="AM">AM</option>
+                            <option value="PM">PM</option>
+                        </select>
+                    </div>
+                    <input type="hidden" id="endTime">
                 </div>
                 <div class="form-group">
                     <label for="activity">Nombre de la actividad:</label>
@@ -784,6 +802,7 @@
         let timeDelta = 0; // Diferencia en minutos desde el inicio original
         let isPaused = false;
         let pauseStartTime = null;
+        let isSyncingTimeFields = false;
 
         // Cargar actividades desde localStorage al iniciar
         function loadActivities() {
@@ -1112,6 +1131,28 @@
             }
         }
 
+        // Poblar dropdowns de hora de fin (mismas opciones que inicio)
+        function populateTimeSelectorsForEndTime() {
+            const hourSelect = document.getElementById('endTimeHour');
+            const minuteSelect = document.getElementById('endTimeMinute');
+            
+            // Poblar horas (1-12 para formato 12 horas)
+            for (let i = 1; i <= 12; i++) {
+                const option = document.createElement('option');
+                option.value = String(i);
+                option.textContent = String(i);
+                hourSelect.appendChild(option);
+            }
+            
+            // Poblar minutos (0-59)
+            for (let i = 0; i < 60; i++) {
+                const option = document.createElement('option');
+                option.value = String(i).padStart(2, '0');
+                option.textContent = String(i).padStart(2, '0');
+                minuteSelect.appendChild(option);
+            }
+        }
+
         // Sincronizar selects con campo hidden (convertir de 12h a 24h)
         function syncTimeField() {
             const hour12 = parseInt(document.getElementById('timeHour').value);
@@ -1130,6 +1171,25 @@
                 document.getElementById('time').value = `${String(hour24).padStart(2, '0')}:${minute}`;
             } else {
                 document.getElementById('time').value = '';
+            }
+        }
+
+        // Sincronizar selects de hora de fin con campo hidden (convertir de 12h a 24h)
+        function syncEndTimeField() {
+            const hour12 = parseInt(document.getElementById('endTimeHour').value);
+            const minute = document.getElementById('endTimeMinute').value;
+            const ampm = document.getElementById('endTimeAmPm').value;
+            
+            if (hour12 && minute && ampm) {
+                let hour24 = hour12;
+                if (ampm === 'PM' && hour12 !== 12) {
+                    hour24 = hour12 + 12;
+                } else if (ampm === 'AM' && hour12 === 12) {
+                    hour24 = 0;
+                }
+                document.getElementById('endTime').value = `${String(hour24).padStart(2, '0')}:${minute}`;
+            } else {
+                document.getElementById('endTime').value = '';
             }
         }
 
@@ -1167,6 +1227,115 @@
             syncTimeField();
         }
 
+        // Establecer hora de fin en los selects desde formato HH:MM (convertir de 24h a 12h)
+        function setEndTimeSelectors(timeStr) {
+            if (!timeStr) {
+                document.getElementById('endTimeHour').value = '';
+                document.getElementById('endTimeMinute').value = '';
+                document.getElementById('endTimeAmPm').value = '';
+                syncEndTimeField();
+                return;
+            }
+            
+            const [hour24, minute] = timeStr.split(':');
+            const hour24Num = parseInt(hour24);
+            
+            let hour12, ampm;
+            if (hour24Num === 0) {
+                hour12 = 12;
+                ampm = 'AM';
+            } else if (hour24Num === 12) {
+                hour12 = 12;
+                ampm = 'PM';
+            } else if (hour24Num < 12) {
+                hour12 = hour24Num;
+                ampm = 'AM';
+            } else {
+                hour12 = hour24Num - 12;
+                ampm = 'PM';
+            }
+            
+            document.getElementById('endTimeHour').value = String(hour12);
+            document.getElementById('endTimeMinute').value = minute || '';
+            document.getElementById('endTimeAmPm').value = ampm || '';
+            syncEndTimeField();
+        }
+
+        // Helpers: get start/end minutes if available
+        function getSelectedStartMinutes() {
+            syncTimeField();
+            const timeStr = document.getElementById('time').value;
+            if (!timeStr) return null;
+            return parseTime(timeStr);
+        }
+
+        function getSelectedEndMinutes() {
+            syncEndTimeField();
+            const timeStr = document.getElementById('endTime').value;
+            if (!timeStr) return null;
+            return parseTime(timeStr);
+        }
+
+        // Mantener duración y hora de fin sincronizadas (una actualiza la otra)
+        function syncDurationAndEndTime(changedField) {
+            if (isSyncingTimeFields) return;
+            isSyncingTimeFields = true;
+            try {
+                const startMinutes = getSelectedStartMinutes();
+                if (startMinutes === null) return;
+
+                const durationInput = document.getElementById('duration');
+                const durationValRaw = durationInput.value;
+                const durationMinutes = durationValRaw ? parseInt(durationValRaw, 10) : null;
+
+                const endMinutes = getSelectedEndMinutes();
+
+                if (changedField === 'duration') {
+                    if (durationMinutes === null || Number.isNaN(durationMinutes) || durationMinutes <= 0) {
+                        setEndTimeSelectors('');
+                        return;
+                    }
+                    const computedEnd = startMinutes + durationMinutes;
+                    // Mantenerlo en el mismo día (no cruzar medianoche)
+                    if (computedEnd >= 1440) {
+                        setEndTimeSelectors('');
+                        return;
+                    }
+                    setEndTimeSelectors(formatTime(computedEnd));
+                    return;
+                }
+
+                if (changedField === 'endTime') {
+                    if (endMinutes === null) {
+                        durationInput.value = '';
+                        return;
+                    }
+                    const computedDuration = endMinutes - startMinutes;
+                    if (computedDuration <= 0) {
+                        durationInput.value = '';
+                        return;
+                    }
+                    durationInput.value = String(computedDuration);
+                    return;
+                }
+
+                // Si cambió la hora de inicio, intentar derivar el otro campo desde el que exista
+                if (durationMinutes !== null && !Number.isNaN(durationMinutes) && durationMinutes > 0) {
+                    const computedEnd = startMinutes + durationMinutes;
+                    if (computedEnd < 1440) {
+                        setEndTimeSelectors(formatTime(computedEnd));
+                    } else {
+                        setEndTimeSelectors('');
+                    }
+                } else if (endMinutes !== null) {
+                    const computedDuration = endMinutes - startMinutes;
+                    durationInput.value = computedDuration > 0 ? String(computedDuration) : '';
+                }
+            } finally {
+                isSyncingTimeFields = false;
+            }
+        }
+
         // Formulario de actividades
         document.getElementById('activityForm').addEventListener('submit', (e) => {
             e.preventDefault();
@@ -1174,13 +1343,60 @@
             // Sincronizar tiempo antes de enviar
             syncTimeField();
             const time = document.getElementById('time').value;
-            const duration = parseInt(document.getElementById('duration').value);
+            syncEndTimeField();
+            const endTime = document.getElementById('endTime').value;
+            const durationRaw = document.getElementById('duration').value;
+            let duration = durationRaw ? parseInt(durationRaw, 10) : NaN;
             const activity = document.getElementById('activity').value;
             const editIndex = parseInt(document.getElementById('editIndex').value);
 
             // Ocultar mensaje de error previo
             const errorMessage = document.getElementById('errorMessage');
             errorMessage.classList.remove('show');
+
+            // Validación: debe existir tiempo de inicio y (duración o hora de fin)
+            if (!time) {
+                errorMessage.textContent = 'Error: Por favor, selecciona la hora de inicio.';
+                errorMessage.classList.add('show');
+                return;
+            }
+
+            const startMinutes = parseTime(time);
+
+            if (!durationRaw && !endTime) {
+                errorMessage.textContent = 'Error: Ingresa la duración (en minutos) o la hora de fin.';
+                errorMessage.classList.add('show');
+                return;
+            }
+
+            // Si no hay duración, calcularla desde hora de fin
+            if (!durationRaw) {
+                const endMinutes = parseTime(endTime);
+                duration = endMinutes - startMinutes;
+            }
+
+            if (!Number.isFinite(duration) || Number.isNaN(duration) || duration <= 0) {
+                errorMessage.textContent = 'Error: La duración debe ser un número mayor que 0 (o la hora de fin debe ser posterior a la hora de inicio).';
+                errorMessage.classList.add('show');
+                return;
+            }
+
+            // Si se ingresó hora de fin también, validar consistencia
+            if (endTime) {
+                const endMinutes = parseTime(endTime);
+                if (endMinutes <= startMinutes) {
+                    errorMessage.textContent = 'Error: La hora de fin debe ser posterior a la hora de inicio.';
+                    errorMessage.classList.add('show');
+                    return;
+                }
+                if ((startMinutes + duration) !== endMinutes) {
+                    // Ajustar endTime mostrado para reflejar la duración calculada/ingresada
+                    const computedEnd = startMinutes + duration;
+                    if (computedEnd < 1440) {
+                        setEndTimeSelectors(formatTime(computedEnd));
+                    }
+                }
+            }
 
             // Verificar colisiones
             const collision = hasCollision(time, duration, editIndex >= 0 ? editIndex : -1);
@@ -1248,6 +1464,9 @@
             const activity = activities[index];
             setTimeSelectors(activity.time);
             document.getElementById('duration').value = activity.duration;
+            const startTimeMinutes = parseTime(activity.time);
+            const endTimeMinutes = startTimeMinutes + activity.duration;
+            setEndTimeSelectors(endTimeMinutes < 1440 ? formatTime(endTimeMinutes) : '');
             document.getElementById('activity').value = activity.activity;
             document.getElementById('editIndex').value = index;
             editingIndex = index;
@@ -1273,6 +1492,7 @@
         function resetForm() {
             document.getElementById('activityForm').reset();
             setTimeSelectors('');
+            setEndTimeSelectors('');
             document.getElementById('editIndex').value = '-1';
             editingIndex = -1;
             document.getElementById('formTitle').textContent = 'Agregar Actividad';
@@ -1625,11 +1845,19 @@
 
         // Inicializar
         populateTimeSelectors();
+        // Reusar las mismas opciones para hora/fin
+        populateTimeSelectorsForEndTime();
         
         // Agregar event listeners a los selects de tiempo
-        document.getElementById('timeHour').addEventListener('change', syncTimeField);
-        document.getElementById('timeMinute').addEventListener('change', syncTimeField);
-        document.getElementById('timeAmPm').addEventListener('change', syncTimeField);
+        document.getElementById('timeHour').addEventListener('change', () => { syncTimeField(); syncDurationAndEndTime('startTime'); });
+        document.getElementById('timeMinute').addEventListener('change', () => { syncTimeField(); syncDurationAndEndTime('startTime'); });
+        document.getElementById('timeAmPm').addEventListener('change', () => { syncTimeField(); syncDurationAndEndTime('startTime'); });
+
+        // Sincronización duración <-> hora de fin
+        document.getElementById('duration').addEventListener('input', () => syncDurationAndEndTime('duration'));
+        document.getElementById('endTimeHour').addEventListener('change', () => { syncEndTimeField(); syncDurationAndEndTime('endTime'); });
+        document.getElementById('endTimeMinute').addEventListener('change', () => { syncEndTimeField(); syncDurationAndEndTime('endTime'); });
+        document.getElementById('endTimeAmPm').addEventListener('change', () => { syncEndTimeField(); syncDurationAndEndTime('endTime'); });
         
         // Actualizar reloj
         function updateClock() {
